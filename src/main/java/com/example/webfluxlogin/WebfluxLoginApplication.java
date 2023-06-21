@@ -56,6 +56,11 @@ public class WebfluxLoginApplication {
 	}
 
 	@Bean
+	public PasswordEncoder passwordEncoder() {
+		return new BCryptPasswordEncoder();
+	}
+
+	@Bean
 	public RouterFunction routerFunction(UsersRepository usersRepository, PasswordEncoder passwordEncoder) {
 		return RouterFunctions
 				.route()
@@ -79,13 +84,12 @@ public class WebfluxLoginApplication {
 
 @Component
 @EnableWebFluxSecurity
+@RequiredArgsConstructor
 @Slf4j
 class CustomWebSecurity {
-	@Bean
-	public PasswordEncoder passwordEncoder() {
-		return new BCryptPasswordEncoder();
-	}
 
+	private final ReactiveUserDetailsService reactiveUserDetailsService;
+	private final PasswordEncoder passwordEncoder;
 	@Bean
 	@SneakyThrows
 	public SecurityWebFilterChain securityFilterChain(ServerHttpSecurity http, ReactiveAuthenticationManager authenticationManager) {
@@ -95,13 +99,14 @@ class CustomWebSecurity {
 						.anyExchange().authenticated()
 				)
 				.csrf(csrf -> csrf.disable())
-				.authenticationManager(authentication -> {
-					return ReactiveSecurityContextHolder.getContext()
-							.map(securityContext -> securityContext.getAuthentication())
-							.filter(auth -> auth.isAuthenticated())
-							.switchIfEmpty(Mono.defer(() -> authenticationManager.authenticate(authentication)))
-							.flatMap(auth -> Mono.just(new UsernamePasswordAuthenticationToken(auth.getPrincipal(), auth.getCredentials(), auth.getAuthorities())));
-				})
+//				.authenticationManager(authentication -> {
+//					return ReactiveSecurityContextHolder.getContext()
+//							.map(securityContext -> securityContext.getAuthentication())
+//							.filter(auth -> auth.isAuthenticated())
+//							.switchIfEmpty(Mono.defer(() -> authenticationManager.authenticate(authentication)))
+//							.flatMap(auth -> Mono.just(new UsernamePasswordAuthenticationToken(auth.getPrincipal(), auth.getCredentials(), auth.getAuthorities())));
+//				})
+				.authenticationManager(authenticationManager)
 				.formLogin(Customizer.withDefaults()) // will display login page
 				.httpBasic(Customizer.withDefaults()) // will allow for basic auth
 				.build();
@@ -119,7 +124,7 @@ class CustomWebSecurity {
 //	}
 
 	@Bean
-	public ReactiveAuthenticationManager reactiveAuthenticationManager(ReactiveUserDetailsService reactiveUserDetailsService, PasswordEncoder passwordEncoder) {
+	public ReactiveAuthenticationManager reactiveAuthenticationManager() {
 		return authentication -> {
 			var usernameInput = authentication.getName();
 			var passwordInput = authentication.getCredentials().toString();
@@ -127,7 +132,6 @@ class CustomWebSecurity {
 			return reactiveUserDetailsService.findByUsername(usernameInput)
 					.doOnSuccess(userDetails -> log.info("success {}", userDetails))
 					.doOnError(throwable -> log.error("error {}", throwable.getMessage()))
-					.onErrorReturn(new Users(0L, "", ""))
 					.filter(userDetails -> passwordEncoder.matches(passwordInput, userDetails.getPassword()))
 					.map(userDetails -> new UsernamePasswordAuthenticationToken(userDetails, passwordInput, userDetails.getAuthorities()));
 		};
