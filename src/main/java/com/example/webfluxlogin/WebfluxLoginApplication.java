@@ -12,15 +12,25 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.r2dbc.repository.R2dbcRepository;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.ProviderManager;
+import org.springframework.security.authentication.ReactiveAuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.authorization.AuthenticatedAuthorizationManager;
 import org.springframework.security.authorization.AuthenticatedReactiveAuthorizationManager;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.userdetails.MapReactiveUserDetailsService;
+import org.springframework.security.core.userdetails.ReactiveUserDetailsPasswordService;
+import org.springframework.security.core.userdetails.ReactiveUserDetailsService;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -33,6 +43,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.reactive.function.server.RouterFunction;
 import org.springframework.web.reactive.function.server.RouterFunctions;
 import org.springframework.web.reactive.function.server.ServerResponse;
+import reactor.core.publisher.Mono;
 
 import java.util.Collection;
 import java.util.Optional;
@@ -45,15 +56,20 @@ public class WebfluxLoginApplication {
 	}
 
 	@Bean
-	public RouterFunction routerFunction() {
+	public RouterFunction routerFunction(UsersRepository usersRepository, PasswordEncoder passwordEncoder) {
 		return RouterFunctions
 				.route()
 				.path("/message", builder -> builder
-						.GET("", request -> ServerResponse.ok().build()))
+						.GET("", request -> ServerResponse.ok().body(Mono.just("Hello World!"), String.class)))
 				.path("/user", builder -> builder
-						.GET("", request -> ServerResponse.noContent().build())
-						.GET("/{id}", request -> ServerResponse.noContent().build())
-						.POST("", request -> ServerResponse.noContent().build())
+						.GET("", request -> ServerResponse.ok().body(usersRepository.findAll(), Users.class))
+						.GET("/{id}", request -> ServerResponse.ok().body(usersRepository.findById(Long.parseLong(request.pathVariable("id"))), Users.class))
+						.POST("", request -> {
+							return request.bodyToMono(Users.class)
+									.map(users -> new Users(users.id(), users.getUsername(), passwordEncoder.encode(users.getPassword())))
+									.flatMap(usersRepository::save)
+									.flatMap(users -> ServerResponse.ok().build());
+						})
 						.PUT("/{id}", request -> ServerResponse.noContent().build())
 						.DELETE("/{id}", request -> ServerResponse.noContent().build()))
 				.build();
@@ -63,6 +79,7 @@ public class WebfluxLoginApplication {
 
 @Component
 @EnableWebFluxSecurity
+@Slf4j
 class CustomWebSecurity {
 	@Bean
 	public PasswordEncoder passwordEncoder() {
@@ -71,14 +88,53 @@ class CustomWebSecurity {
 
 	@Bean
 	@SneakyThrows
-	public SecurityWebFilterChain securityFilterChain(ServerHttpSecurity http) {
+	public SecurityWebFilterChain securityFilterChain(ServerHttpSecurity http, ReactiveAuthenticationManager authenticationManager) {
 		return http
-				.authorizeExchange(exchanges -> exchanges.pathMatchers(HttpMethod.POST, "/user").permitAll().anyExchange().authenticated())
+				.authorizeExchange(exchanges -> exchanges
+						.pathMatchers( "/user").permitAll()
+						.anyExchange().authenticated()
+				)
 				.csrf(csrf -> csrf.disable())
+				.authenticationManager(authentication -> {
+					return ReactiveSecurityContextHolder.getContext()
+							.map(securityContext -> securityContext.getAuthentication())
+							.filter(auth -> auth.isAuthenticated())
+							.switchIfEmpty(Mono.defer(() -> authenticationManager.authenticate(authentication)))
+							.flatMap(auth -> Mono.just(new UsernamePasswordAuthenticationToken(auth.getPrincipal(), auth.getCredentials(), auth.getAuthorities())));
+				})
+				.formLogin(Customizer.withDefaults()) // will display login page
+				.httpBasic(Customizer.withDefaults()) // will allow for basic auth
 				.build();
 	}
-	
+
+//	// Inmemory user
+//	@Bean
+//	public MapReactiveUserDetailsService mapReactiveUserDetailsService(PasswordEncoder passwordEncoder) {
+//		return new MapReactiveUserDetailsService(
+//				org.springframework.security.core.userdetails.User.withUsername("user")
+//						.password(passwordEncoder.encode("password"))
+//						.roles("USER")
+//						.build()
+//		);
+//	}
+
+	@Bean
+	public ReactiveAuthenticationManager reactiveAuthenticationManager(ReactiveUserDetailsService reactiveUserDetailsService, PasswordEncoder passwordEncoder) {
+		return authentication -> {
+			var usernameInput = authentication.getName();
+			var passwordInput = authentication.getCredentials().toString();
+			log.info("{} is trying to login", usernameInput);
+			return reactiveUserDetailsService.findByUsername(usernameInput)
+					.doOnSuccess(userDetails -> log.info("success {}", userDetails))
+					.doOnError(throwable -> log.error("error {}", throwable.getMessage()))
+					.onErrorReturn(new Users(0L, "", ""))
+					.filter(userDetails -> passwordEncoder.matches(passwordInput, userDetails.getPassword()))
+					.map(userDetails -> new UsernamePasswordAuthenticationToken(userDetails, passwordInput, userDetails.getAuthorities()));
+		};
+	}
 }
+
+
 record Users(@Id Long id, String username, String password) implements UserDetails {
 	@Override
 	public Collection<? extends GrantedAuthority> getAuthorities() {
@@ -117,27 +173,26 @@ record Users(@Id Long id, String username, String password) implements UserDetai
 }
 
 interface UsersRepository extends R2dbcRepository<Users, Long>{
-	public Optional<Users> findByUsername(String username);
-}
-@Service
-@RequiredArgsConstructor
-@Slf4j
-class UsersService implements UserDetailsService {
-	private final UsersRepository usersRepository;
-
-	@Override
-	public UserDetails loadUserByUsername(String username) {
-		log.info("loadUserByUsername: {}", username);
-		return usersRepository
-				.findByUsername(username)
-				.orElseThrow(() -> new UsersNotFoundException("User not found"));
-
-	}
+	public Mono<Users> findByUsername(String username);
 }
 
 @ResponseStatus(HttpStatus.NOT_EXTENDED)
 class UsersNotFoundException extends RuntimeException {
 	public UsersNotFoundException(String message) {
 		super(message);
+	}
+}
+
+@Service
+@RequiredArgsConstructor
+class UsersDetailsService implements ReactiveUserDetailsService {
+	private final UsersRepository usersRepository;
+	@Override
+	public Mono<UserDetails> findByUsername(String username) {
+		return usersRepository.findByUsername(username)
+				.switchIfEmpty(Mono.error(new BadCredentialsException("User not found")))
+				.onErrorResume(throwable -> Mono.error(new BadCredentialsException("User not found")))
+				.map(user -> user)
+				.cast(UserDetails.class);
 	}
 }
