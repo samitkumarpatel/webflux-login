@@ -2,10 +2,10 @@ services:
   postgres:
     image: 'postgres:latest'
     environment:
-      - 'POSTGRES_DB=mydatabase'
-      - 'POSTGRES_PASSWORD=secret'
+      - 'POSTGRES_DB=postgres'
+      - 'POSTGRES_PASSWORD=mypassword'
       - 'POSTGRES_USER=myuser'
     ports:
-      - '5432'
+      - '5432:5432'
     volumes:
       - /tmp/db:/var/lib/postgresql/data

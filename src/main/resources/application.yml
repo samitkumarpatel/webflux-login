@@ -4,18 +4,18 @@ spring:
     name: @project.artifactId@
     version: @project.version@
   r2dbc:
-    url: r2dbc:postgresql://localhost:5432/mydatabase
+    url: r2dbc:postgresql://localhost:5432/postgres
     username: myuser
-    password: secret
+    password: mypassword
   flyway:
-    url: jdbc:postgresql://localhost:5432/mydatabase
+    url: jdbc:postgresql://localhost:5432/postgres
     user: ${spring.r2dbc.username}
     password: ${spring.r2dbc.password}
 
-logging:
-  level:
-    org:
-      springframework:
-        security: TRACE
+#logging:
+#  level:
+#    org:
+#      springframework:
+#        security: TRACE
 
 
