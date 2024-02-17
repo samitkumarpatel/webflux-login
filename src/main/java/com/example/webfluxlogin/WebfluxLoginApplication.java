@@ -12,11 +12,7 @@ import org.springframework.data.annotation.Id;
 import org.springframework.data.r2dbc.repository.R2dbcRepository;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.security.authentication.ProviderManager;
-import org.springframework.security.authentication.ReactiveAuthenticationManager;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.authentication.*;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.authorization.AuthenticatedAuthorizationManager;
 import org.springframework.security.authorization.AuthenticatedReactiveAuthorizationManager;
@@ -61,7 +57,7 @@ public class WebfluxLoginApplication {
 	}
 
 	@Bean
-	public RouterFunction routerFunction(UsersRepository usersRepository, PasswordEncoder passwordEncoder) {
+	public RouterFunction<ServerResponse> routerFunction(UsersRepository usersRepository, PasswordEncoder passwordEncoder) {
 		return RouterFunctions
 				.route()
 				.path("/message", builder -> builder
@@ -98,7 +94,7 @@ class CustomWebSecurity {
 						.pathMatchers( "/user").permitAll()
 						.anyExchange().authenticated()
 				)
-				.csrf(csrf -> csrf.disable())
+				.csrf(ServerHttpSecurity.CsrfSpec::disable)
 //				.authenticationManager(authentication -> {
 //					return ReactiveSecurityContextHolder.getContext()
 //							.map(securityContext -> securityContext.getAuthentication())
@@ -123,6 +119,9 @@ class CustomWebSecurity {
 //		);
 //	}
 
+
+	/*
+	// This approach is not the most efficiant way
 	@Bean
 	public ReactiveAuthenticationManager reactiveAuthenticationManager() {
 		return authentication -> {
@@ -135,6 +134,13 @@ class CustomWebSecurity {
 					.filter(userDetails -> passwordEncoder.matches(passwordInput, userDetails.getPassword()))
 					.map(userDetails -> new UsernamePasswordAuthenticationToken(userDetails, passwordInput, userDetails.getAuthorities()));
 		};
+	}*/
+
+	@Bean
+	public ReactiveAuthenticationManager authenticationManager(ReactiveUserDetailsService userDetailsService, PasswordEncoder passwordEncoder) {
+		UserDetailsRepositoryReactiveAuthenticationManager authenticationManager = new UserDetailsRepositoryReactiveAuthenticationManager(userDetailsService);
+		authenticationManager.setPasswordEncoder(passwordEncoder);
+		return authenticationManager;
 	}
 }
 
